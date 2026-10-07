@@ -1,0 +1,84 @@
+`timescale 1ns/1ps
+module tb_auth;
+    // TEMPEL hasil Python di sini
+    localparam [127:0] TAG1 = 128'h00000000000000000000000000000000;
+    localparam [127:0] TAG2 = 128'h00000000000000000000000000000000;
+
+    reg clk = 0, rst_n = 0;
+    reg byte_valid = 0;
+    reg [7:0] byte_data = 0;
+    always #10 clk = ~clk;
+
+    wire        frame_done, format_err;
+    wire [7:0]  ver_type, src_id, dst_id, len, pay0;
+    wire [31:0] counter;
+    wire [127:0] tag;
+    wire [255:0] payload;
+
+    frame_parser u_parser (
+        .clk(clk), .rst_n(rst_n), .byte_valid(byte_valid), .byte_data(byte_data),
+        .frame_done(frame_done), .format_err(format_err),
+        .ver_type(ver_type), .src_id(src_id), .dst_id(dst_id), .len(len),
+        .counter(counter), .tag(tag), .pay0(pay0), .payload(payload)
+    );
+
+    wire ev_ok, ev_auth_fail, ev_replay;
+    wire [7:0] info_len, info_ctr, info_pay0;
+
+    auth_ctrl u_auth (
+        .clk(clk), .rst_n(rst_n), .frame_done(frame_done),
+        .ver_type(ver_type), .src_id(src_id), .dst_id(dst_id), .len(len),
+        .counter(counter), .tag(tag), .payload(payload),
+        .ev_ok(ev_ok), .ev_auth_fail(ev_auth_fail), .ev_replay(ev_replay),
+        .info_len(info_len), .info_ctr(info_ctr), .info_pay0(info_pay0)
+    );
+
+    reg [7:0] last_ev = 0;
+    reg       got = 0;
+    always @(posedge clk) begin
+        if      (ev_ok)        begin last_ev <= "O"; got <= 1; end
+        else if (ev_auth_fail) begin last_ev <= "A"; got <= 1; end
+        else if (ev_replay)    begin last_ev <= "R"; got <= 1; end
+    end
+
+    task send_byte(input [7:0] b);
+        begin
+            @(posedge clk); byte_valid <= 1; byte_data <= b;
+            @(posedge clk); byte_valid <= 0;
+            repeat (3) @(posedge clk);
+        end
+    endtask
+
+    integer k, w;
+    task send_and_check(input [255:0] name8, input [31:0] ctr, input [127:0] tg,
+                        input flip, input [7:0] exp);
+        begin
+            got = 0;
+            send_byte(8'hA5); send_byte(8'h01); send_byte(8'h11); send_byte(8'h22); send_byte(8'd4);
+            send_byte(ctr[31:24]); send_byte(ctr[23:16]); send_byte(ctr[15:8]); send_byte(ctr[7:0]);
+            for (k = 0; k < 4; k = k + 1)
+                send_byte((8'h10 + k) ^ ((flip && k == 0) ? 8'h01 : 8'h00));
+            for (k = 0; k < 16; k = k + 1)
+                send_byte(tg[127 - 8*k -: 8]);
+            w = 0;
+            while (!got && w < 3000) begin @(posedge clk); w = w + 1; end
+            if (got && last_ev == exp) $display("PASS  %0s -> %c", name8, last_ev);
+            else                       $display("FAIL  %0s -> dapat %c, harus %c", name8, last_ev, exp);
+        end
+    endtask
+
+    initial begin
+        $dumpfile("auth.vcd"); $dumpvars(0, tb_auth);
+        repeat (5) @(posedge clk);
+        rst_n <= 1;
+        repeat (5) @(posedge clk);
+
+        send_and_check("1 valid ctr=1       ", 32'd1, TAG1, 1'b0, "O");
+        send_and_check("2 replay ctr=1      ", 32'd1, TAG1, 1'b0, "R");
+        send_and_check("3 tag salah ctr=2   ", 32'd2, TAG1, 1'b0, "A");
+        send_and_check("4 data diubah ctr=1 ", 32'd1, TAG1, 1'b1, "A");
+        send_and_check("5 valid ctr=2       ", 32'd2, TAG2, 1'b0, "O");
+        send_and_check("6 counter lama ctr=1", 32'd1, TAG1, 1'b0, "R");
+        $finish;
+    end
+endmodule
