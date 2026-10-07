@@ -19,7 +19,7 @@ module top_echo #(
         .clk(clk), .rst_n(rst_n), .data(rx_data), .start(rx_valid),
         .tx(uart_tx_pin), .busy());
 
-    // heartbeat: LED berkedip 1 detik nyala, 1 detik mati jika CLK_FREQ benar
+    
     reg [31:0] hb_cnt;
     reg        hb;
     always @(posedge clk or negedge rst_n) begin
@@ -27,8 +27,6 @@ module top_echo #(
         else if (hb_cnt == CLK_FREQ/2 - 1) begin hb_cnt <= 0; hb <= ~hb; end
         else hb_cnt <= hb_cnt + 1;
     end
-
-    // led[3] = heartbeat, led[2:0] = 3 bit rendah byte terakhir yang diterima
-    // tanda ~ karena LED board umumnya active-low; hapus jika nyala/mati terbalik
+    
     assign led = ~{hb, rx_data[2:0]};
 endmodule
